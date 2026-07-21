@@ -991,6 +991,48 @@ function validateInteractiveHeaderFooter(
 }
 
 // ============================================================
+// Embedded Signup (OAuth code exchange)
+// ============================================================
+//
+// After `FB.login()` completes inside the Embedded Signup popup, the
+// client only gets a short-lived authorization `code` — not a usable
+// access token. Exchanging it happens server-side (client_secret must
+// never reach the browser). Note this is Meta's *implicit* code-for-
+// token exchange used specifically for Embedded Signup/JS SDK logins:
+// no `redirect_uri` is passed or expected, unlike a normal OAuth
+// redirect flow.
+
+export interface ExchangeCodeForTokenArgs {
+  code: string
+  appId: string
+  appSecret: string
+}
+
+/**
+ * Exchange the Embedded Signup authorization code for a real access
+ * token, scoped to the WABA(s) the user granted during the popup.
+ */
+export async function exchangeCodeForToken(
+  args: ExchangeCodeForTokenArgs,
+): Promise<{ accessToken: string }> {
+  const { code, appId, appSecret } = args
+  const params = new URLSearchParams({
+    client_id: appId,
+    client_secret: appSecret,
+    code,
+  })
+  const response = await fetch(`${META_API_BASE}/oauth/access_token?${params.toString()}`)
+  if (!response.ok) {
+    await throwMetaError(response, `Code exchange failed: ${response.status}`)
+  }
+  const data = (await response.json()) as { access_token?: string }
+  if (!data.access_token) {
+    throw new Error('Meta did not return an access_token for this code.')
+  }
+  return { accessToken: data.access_token }
+}
+
+// ============================================================
 // Media
 // ============================================================
 

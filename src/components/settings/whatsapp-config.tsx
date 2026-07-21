@@ -13,6 +13,7 @@ import {
   Zap,
   AlertTriangle,
   RotateCcw,
+  LogIn,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -35,6 +36,78 @@ const MASKED_TOKEN = '••••••••••••••••';
 
 type ConnectionStatus = 'connected' | 'disconnected' | 'unknown';
 type ResetReason = 'token_corrupted' | 'meta_api_error' | null;
+
+// Embedded Signup — Meta's official "Connect with Meta" flow. The
+// config_id is created once, platform-wide, in Meta for Developers (see
+// docs/whatsapp-embedded-signup.md); it is NOT something this app can
+// generate. Both are NEXT_PUBLIC_ because the Facebook JS SDK and
+// FB.login() run entirely client-side — only the code-for-token exchange
+// (which needs META_APP_SECRET) happens on the server.
+const META_APP_ID = process.env.NEXT_PUBLIC_META_APP_ID;
+const EMBEDDED_SIGNUP_CONFIG_ID = process.env.NEXT_PUBLIC_META_EMBEDDED_SIGNUP_CONFIG_ID;
+const FB_SDK_SRC = 'https://connect.facebook.net/en_US/sdk.js';
+const FB_SDK_SCRIPT_ID = 'facebook-jssdk';
+
+declare global {
+  interface Window {
+    FB?: {
+      init: (options: Record<string, unknown>) => void;
+      login: (
+        callback: (response: { authResponse?: { code?: string } }) => void,
+        options: Record<string, unknown>,
+      ) => void;
+    };
+    fbAsyncInit?: () => void;
+  }
+}
+
+/** Injects the Facebook JS SDK once and resolves after FB.init() runs. */
+function loadFacebookSdk(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (window.FB) {
+      resolve();
+      return;
+    }
+    window.fbAsyncInit = () => {
+      window.FB!.init({
+        appId: META_APP_ID,
+        autoLogAppEvents: true,
+        xfbml: false,
+        version: 'v21.0',
+      });
+      resolve();
+    };
+    if (document.getElementById(FB_SDK_SCRIPT_ID)) {
+      // Script tag already requested by an earlier click — fbAsyncInit
+      // above will fire once it finishes loading.
+      return;
+    }
+    const script = document.createElement('script');
+    script.id = FB_SDK_SCRIPT_ID;
+    script.src = FB_SDK_SRC;
+    script.async = true;
+    script.defer = true;
+    script.crossOrigin = 'anonymous';
+    script.onerror = () => reject(new Error('Failed to load the Facebook SDK.'));
+    document.body.appendChild(script);
+  });
+}
+
+/**
+ * Shape of the `message` event Meta's Embedded Signup popup posts to the
+ * opener window once the user finishes picking their WABA/number. See
+ * https://developers.facebook.com/docs/whatsapp/embedded-signup/implementation#existing-user
+ *
+ *   { type: 'WA_EMBEDDED_SIGNUP', event: 'FINISH', data: { phone_number_id, waba_id } }
+ *   { type: 'WA_EMBEDDED_SIGNUP', event: 'CANCEL' | 'ERROR', data: {...} }
+ */
+interface EmbeddedSignupMessage {
+  type?: string;
+  event?: 'FINISH' | 'CANCEL' | 'ERROR';
+  data?: { phone_number_id?: string; waba_id?: string };
+}
+
+const FACEBOOK_MESSAGE_ORIGINS = ['https://www.facebook.com', 'https://web.facebook.com'];
 
 export function WhatsAppConfig() {
   const t = useTranslations('Settings.whatsapp');
@@ -78,6 +151,15 @@ export function WhatsAppConfig() {
   const lastRegistrationError = config?.last_registration_error ?? null;
 
   const [verifyingRegistration, setVerifyingRegistration] = useState(false);
+
+  // Embedded Signup state. The authorization `code` arrives via the
+  // FB.login() callback; the waba_id/phone_number_id arrive separately
+  // via the `message` listener below — they can land in either order,
+  // so both are stashed in refs and we finalize once both are present.
+  const [signingUp, setSigningUp] = useState(false);
+  const embeddedCodeRef = useRef<string | null>(null);
+  const embeddedWabaInfoRef = useRef<{ wabaId: string; phoneNumberId: string } | null>(null);
+  const embeddedFinalizingRef = useRef(false);
   type RegistrationProbe = {
     live: boolean;
     checks: Record<string, boolean | null>;
@@ -181,6 +263,129 @@ export function WhatsAppConfig() {
     loadedAccountIdRef.current = accountId;
     fetchConfig(accountId);
   }, [authLoading, profileLoading, user?.id, accountId, fetchConfig]);
+
+  // Finalizes the Embedded Signup flow once both halves are in: the auth
+  // `code` (from FB.login's callback) and the waba_id/phone_number_id
+  // (from the `message` listener). Exchanging the code and wiring
+  // webhooks happens server-side — see /api/whatsapp/embedded-signup.
+  const finalizeEmbeddedSignup = useCallback(async () => {
+    if (embeddedFinalizingRef.current) return;
+    if (!embeddedCodeRef.current || !embeddedWabaInfoRef.current) return;
+    embeddedFinalizingRef.current = true;
+    const code = embeddedCodeRef.current;
+    const { wabaId, phoneNumberId } = embeddedWabaInfoRef.current;
+
+    try {
+      const res = await fetch('/api/whatsapp/embedded-signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, waba_id: wabaId, phone_number_id: phoneNumberId }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to connect WhatsApp via Meta.');
+        return;
+      }
+
+      if (data.registered === false && data.registration_error) {
+        toast.error(
+          `Connected, but Meta couldn't register the number: ${data.registration_error}`,
+          { duration: 12000 },
+        );
+      } else {
+        toast.success(
+          data.phone_info?.verified_name
+            ? `Connected — ${data.phone_info.verified_name} can now receive events.`
+            : 'WhatsApp connected via Meta.',
+        );
+      }
+
+      if (accountId) await fetchConfig(accountId);
+    } catch (err) {
+      console.error('Embedded signup finalize error:', err);
+      toast.error('Failed to finish connecting WhatsApp.');
+    } finally {
+      embeddedCodeRef.current = null;
+      embeddedWabaInfoRef.current = null;
+      embeddedFinalizingRef.current = false;
+      setSigningUp(false);
+    }
+  }, [accountId, fetchConfig]);
+
+  // Meta posts the chosen waba_id/phone_number_id to the opener window
+  // via `message` rather than returning them from FB.login() — listen
+  // for the whole lifetime of this screen, not just mid-signup, since
+  // the popup can finish after unrelated re-renders.
+  useEffect(() => {
+    function handleMessage(event: MessageEvent) {
+      if (!FACEBOOK_MESSAGE_ORIGINS.includes(event.origin)) return;
+
+      let payload: EmbeddedSignupMessage;
+      try {
+        payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+      } catch {
+        return;
+      }
+      if (payload?.type !== 'WA_EMBEDDED_SIGNUP') return;
+
+      if (payload.event === 'FINISH' && payload.data?.waba_id && payload.data?.phone_number_id) {
+        embeddedWabaInfoRef.current = {
+          wabaId: payload.data.waba_id,
+          phoneNumberId: payload.data.phone_number_id,
+        };
+        void finalizeEmbeddedSignup();
+      } else if (payload.event === 'CANCEL') {
+        setSigningUp(false);
+        toast.error(t('embeddedSignupCancelled'));
+      } else if (payload.event === 'ERROR') {
+        setSigningUp(false);
+        toast.error(t('embeddedSignupError'));
+      }
+    }
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [finalizeEmbeddedSignup, t]);
+
+  async function handleConnectWithMeta() {
+    if (!META_APP_ID || !EMBEDDED_SIGNUP_CONFIG_ID) {
+      toast.error(t('embeddedSignupNotConfigured'));
+      return;
+    }
+
+    setSigningUp(true);
+    embeddedCodeRef.current = null;
+    embeddedWabaInfoRef.current = null;
+
+    try {
+      await loadFacebookSdk();
+    } catch (err) {
+      console.error('Failed to load Facebook SDK:', err);
+      toast.error(t('embeddedSignupSdkError'));
+      setSigningUp(false);
+      return;
+    }
+
+    window.FB!.login(
+      (response) => {
+        if (response.authResponse?.code) {
+          embeddedCodeRef.current = response.authResponse.code;
+          void finalizeEmbeddedSignup();
+        } else {
+          // Popup closed without completing (user backed out, or denied
+          // permissions) — not an error worth a toast.
+          setSigningUp(false);
+        }
+      },
+      {
+        config_id: EMBEDDED_SIGNUP_CONFIG_ID,
+        response_type: 'code',
+        override_default_response_type: true,
+        extras: { sessionInfoVersion: '3' },
+      },
+    );
+  }
 
   async function handleSave() {
     if (!phoneNumberId.trim()) {
@@ -554,6 +759,58 @@ export function WhatsAppConfig() {
           </Alert>
         )}
 
+        {/* Embedded Signup — the recommended connection path. Wires the
+            tenant's WABA under wacrm's own Meta App, avoiding the
+            per-tenant-App trap that broke Biosol's inbound webhooks. */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-foreground">{t('embeddedSignupTitle')}</CardTitle>
+            <CardDescription className="text-muted-foreground">
+              {t('embeddedSignupDesc')}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {META_APP_ID && EMBEDDED_SIGNUP_CONFIG_ID ? (
+              <Button
+                onClick={handleConnectWithMeta}
+                disabled={signingUp}
+                className="bg-primary hover:bg-primary/90 text-primary-foreground"
+              >
+                {signingUp ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    {t('connecting')}
+                  </>
+                ) : (
+                  <>
+                    <LogIn className="size-4" />
+                    {t('connectWithMeta')}
+                  </>
+                )}
+              </Button>
+            ) : (
+              <Alert className="bg-card border-border">
+                <AlertDescription className="text-muted-foreground">
+                  {t('embeddedSignupNotConfigured')}
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Manual credentials — secondary path. Kept for reconnecting with
+            a hand-generated token, or debugging; most tenants should use
+            "Connect with Meta" above instead. */}
+        <Accordion>
+          <AccordionItem className="border-border">
+            <AccordionTrigger className="text-muted-foreground hover:text-foreground hover:no-underline">
+              {t('advancedManualSetup')}
+            </AccordionTrigger>
+            <AccordionContent className="text-muted-foreground">
+              <p className="text-xs text-muted-foreground mb-4">
+                {t('advancedManualSetupDesc')}
+              </p>
+              <div className="space-y-6">
         {/* API Credentials */}
         <Card>
           <CardHeader>
@@ -738,6 +995,10 @@ export function WhatsAppConfig() {
             </Button>
           )}
         </div>
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
       </div>
 
       {/* Setup Instructions Sidebar */}

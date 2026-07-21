@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import {
+  downloadWhatsappMediaForAccount,
+  WhatsappMediaError,
+} from '@/lib/whatsapp/media'
 
 export async function GET(
   request: Request,
@@ -48,35 +50,23 @@ export async function GET(
       )
     }
 
-    // Fetch and decrypt WhatsApp config
-    const { data: config, error: configError } = await supabase
-      .from('whatsapp_config')
-      .select('*')
-      .eq('account_id', accountId)
-      .single()
-
-    if (configError || !config) {
-      return NextResponse.json(
-        { error: 'WhatsApp not configured' },
-        { status: 400 }
-      )
+    let media
+    try {
+      media = await downloadWhatsappMediaForAccount(supabase, accountId, mediaId)
+    } catch (err) {
+      if (err instanceof WhatsappMediaError && err.code === 'not_configured') {
+        return NextResponse.json(
+          { error: 'WhatsApp not configured' },
+          { status: 400 }
+        )
+      }
+      throw err
     }
 
-    const accessToken = decrypt(config.access_token)
-
-    // Get the download URL from Meta
-    const mediaInfo = await getMediaUrl({ mediaId, accessToken })
-
-    // Download the binary data
-    const { buffer, contentType } = await downloadMedia({
-      downloadUrl: mediaInfo.url,
-      accessToken,
-    })
-
-    return new Response(new Uint8Array(buffer), {
+    return new Response(new Uint8Array(media.buffer), {
       status: 200,
       headers: {
-        'Content-Type': contentType || mediaInfo.mimeType || 'application/octet-stream',
+        'Content-Type': media.contentType,
         'Cache-Control': 'public, max-age=86400',
       },
     })

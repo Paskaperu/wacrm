@@ -219,6 +219,38 @@ Paginated. Each message includes its `direction` (`inbound` /
 `content_*`. The conversation is verified to belong to your account
 first (`404` otherwise).
 
+### `GET /api/v1/media/{mediaId}`
+
+Download a WhatsApp media file — the `mediaId` embedded in an inbound
+message's `media_url` (`/api/whatsapp/media/{mediaId}`, as seen in
+`message.received` webhook payloads and
+`GET /api/v1/conversations/{id}/messages`). Scope: `messages:read`.
+
+Since the caller is an automation rather than a browser, the file
+comes back base64-encoded inside the standard envelope instead of as
+a raw binary response:
+
+```bash
+curl https://your-crm.example.com/api/v1/media/1234567890 \
+  -H "Authorization: Bearer wacrm_live_xxx"
+```
+
+```json
+{
+  "data": {
+    "media_id": "1234567890",
+    "content_type": "image/jpeg",
+    "base64": "/9j/4AAQSkZJRg…"
+  }
+}
+```
+
+`mediaId` must belong to a message in a conversation on your account —
+a media id from another account (or one that never existed) returns
+`404`. Domain error codes beyond the table above:
+`whatsapp_not_configured` (400), `meta_error` (502 — the request
+reached Meta and it rejected the download).
+
 ### `POST /api/v1/broadcasts`
 
 Launch a template broadcast to a list of recipients. Scope:

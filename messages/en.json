@@ -15,7 +15,7 @@
     "createAccount": "Create account"
   },
   "Sidebar": {
-    "title": "CRM Template for WhatsApp",
+    "title": "PASKACRM",
     "dashboard": "Dashboard",
     "inbox": "Inbox",
     "notifications": "Notifications",
@@ -1491,7 +1491,17 @@
       "step4_3": "Paste the <strong class=\"text-foreground\">Webhook Callback URL</strong> from above",
       "step4_4": "Enter the same <strong class=\"text-foreground\">Verify Token</strong> you set here",
       "step4_5": "Subscribe to \"messages\" webhook field",
-      "metaDocs": "Meta WhatsApp API Documentation"
+      "metaDocs": "Meta WhatsApp API Documentation",
+      "embeddedSignupTitle": "Connect with Meta",
+      "embeddedSignupDesc": "The recommended way to connect. Log in with Meta, pick your WhatsApp Business number, and wacrm wires up the correct credentials and webhooks automatically — under wacrm's own Meta App, so this account's webhooks are never at risk of ending up on the wrong app.",
+      "connectWithMeta": "Connect with Meta WhatsApp",
+      "connecting": "Connecting...",
+      "embeddedSignupNotConfigured": "Embedded Signup isn't configured on this deployment yet. Ask your platform operator to finish the one-time Meta setup, or use the advanced manual setup below in the meantime.",
+      "embeddedSignupSdkError": "Could not load the Facebook SDK. Check your network connection and try again.",
+      "embeddedSignupCancelled": "Meta connection cancelled.",
+      "embeddedSignupError": "Meta reported an error during signup. Please try again.",
+      "advancedManualSetup": "Advanced: manual credentials",
+      "advancedManualSetupDesc": "For reconnecting with a hand-generated token, or debugging — most tenants should use \"Connect with Meta\" above instead."
     },
     "sections": {
       "overview": "Overview",
