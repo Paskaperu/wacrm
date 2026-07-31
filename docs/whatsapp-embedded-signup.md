@@ -49,12 +49,18 @@ just clicking "Connect with Meta" in Settings → WhatsApp.
    `.env.local.example`) — the one the webhook and template-upload
    features use today. Do not create a second App for this.
 
-2. **Add the WhatsApp product**, if not already added: App dashboard →
-   **Add Product** → **WhatsApp** → **Set up**.
+2. **Add both required products**, if not already added: App dashboard →
+   **Add Product** → **WhatsApp** → **Set up**, and separately →
+   **Add Product** → **Facebook Login for Business** → **Set up**.
+   Embedded Signup configurations live under Facebook Login for
+   Business, not under the WhatsApp product itself — see step 3.
 
 3. **Create an Embedded Signup configuration.**
-   In the App dashboard: **WhatsApp → Embedded Signup → Configurations
-   → Create configuration**.
+   In the App dashboard: **Facebook Login for Business → Configurations
+   → Create configuration**. (This moved out from under the WhatsApp
+   product's own menu at some point after v2/v3 — if you're looking at
+   an older screenshot or an older revision of this doc, ignore it and
+   use Facebook Login for Business instead.)
    - Give it a name (e.g. `wacrm-production`).
    - Choose the WhatsApp Business permissions/features you want the
      popup to request. For wacrm's use case, the defaults covering
@@ -157,6 +163,21 @@ subscription, and — if needed — phone number registration).
 - **Saved but "Not registered."** Same failure mode the manual flow can
   hit — click "Verify with Meta" on the Registration status banner for
   a diagnostic, or reconnect via the button again.
+- **Popup fails immediately with "No pudimos verificar tu información /
+  No se pudo compartir la cuenta de WhatsApp Business con los socios"
+  (an `(#N/A:...)` trace ID, different each attempt).** This fires
+  *inside Meta's popup*, before `FB.login()`'s callback or the
+  `message` listener ever run — nothing reaches our frontend console
+  or backend logs, so it isn't caused by `config_id`, the `extras`
+  passed to `FB.login()`, or anything else in this repo. It matches
+  Meta's documented restriction that a WABA originally created by hand
+  via the App dashboard (App → WhatsApp → API Setup) is not eligible
+  for Embedded Signup sharing/onboarding, even after deleting and
+  recreating that WABA. Confirmed for the Biosol number in 2026-07;
+  see the "Existing WABAs" caveat on Meta's Embedded Signup overview
+  doc. The fix has to happen on Meta's side (new WABA created *through*
+  Embedded Signup itself, or Meta support) — there is no code-side
+  workaround.
 - **"This WhatsApp phone number is already linked to another account."**
   wacrm is one-number-per-account; someone already connected this exact
   number under a different account on this instance.
