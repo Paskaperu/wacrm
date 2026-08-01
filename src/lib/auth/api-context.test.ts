@@ -116,6 +116,19 @@ describe("requireApiKey", () => {
     expect(ctx.accountId).toBe("acct-1");
   });
 
+  it("403s with account_suspended when the account is suspended — before the scope check", async () => {
+    // The key also lacks the required scope here on purpose: suspension
+    // must win over a missing-scope 403, so the wire error never lets a
+    // suspended tenant's key learn what scopes it holds.
+    accountRow = { status: "suspended" };
+    findActiveKeyByHash.mockResolvedValue(row({ scopes: ["contacts:read"] }));
+    await expectApiError(
+      requireApiKey(reqWith(`Bearer ${KEY}`), "messages:send"),
+      "account_suspended",
+      403,
+    );
+  });
+
   it("403s when the key lacks the required scope", async () => {
     findActiveKeyByHash.mockResolvedValue(row({ scopes: ["contacts:read"] }));
     await expectApiError(
