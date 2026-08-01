@@ -5,10 +5,23 @@ import type { ApiKeyRow } from "@/lib/api-keys/store";
 import { ApiError } from "@/lib/api/v1/respond";
 import { __resetRateLimitForTests, RATE_LIMITS } from "@/lib/rate-limit";
 
-// Mock the service-role client factory — requireApiKey only stashes
-// the returned client in the context; tests never call through it.
+// Mock the service-role client factory. requireApiKey stashes the
+// returned client in the context (tests never call through it for that
+// part) AND uses it directly for the account-suspension lookup — so the
+// stub needs a `.from('accounts')...maybeSingle()` chain. Defaults to an
+// active account; tests that care about suspension override `accountRow`.
+let accountRow: { status: string } | null = { status: "active" };
 vi.mock("@/lib/flows/admin-client", () => ({
-  supabaseAdmin: () => ({ __isMockAdminClient: true }),
+  supabaseAdmin: () => ({
+    __isMockAdminClient: true,
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => ({ data: accountRow, error: null }),
+        }),
+      }),
+    }),
+  }),
 }));
 
 // Mock the store so we control which row a hash resolves to.
@@ -47,6 +60,7 @@ beforeEach(() => {
   __resetRateLimitForTests();
   findActiveKeyByHash.mockReset();
   touchLastUsed.mockReset();
+  accountRow = { status: "active" };
 });
 
 afterEach(() => {

@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 // Service-role client for /api/internal/provisioning/*. Mirrors
@@ -31,7 +32,18 @@ export function supabaseAdmin(): SupabaseClient {
 export function checkProvisioningSecret(request: Request): string | null {
   const expected = process.env.PROVISIONING_API_SECRET
   if (!expected) return 'provisioning API not configured'
-  const supplied = request.headers.get('x-provisioning-secret')
-  if (supplied !== expected) return 'Unauthorized'
+  // Constant-time compare so an attacker who can reach this endpoint can't
+  // recover the secret byte-by-byte from response-time deltas. Length
+  // pre-check is required by timingSafeEqual (throws on mismatched
+  // lengths) and only leaks the length itself, which isn't sensitive.
+  const supplied = request.headers.get('x-provisioning-secret') ?? ''
+  const suppliedBuf = Buffer.from(supplied)
+  const expectedBuf = Buffer.from(expected)
+  if (
+    suppliedBuf.length !== expectedBuf.length ||
+    !timingSafeEqual(suppliedBuf, expectedBuf)
+  ) {
+    return 'Unauthorized'
+  }
   return null
 }

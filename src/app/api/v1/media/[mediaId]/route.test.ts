@@ -19,6 +19,10 @@ vi.mock('@/lib/api-keys/store', () => ({
 // each test sets what it should "find".
 let messageRows: Array<Record<string, unknown>> | null = [];
 let lookupError: { message: string } | null = null;
+// requireApiKey's account-suspension lookup (`accounts.status`). Table-
+// agnostic mock, so this same chain also serves that query — defaults to
+// an active account since no test here exercises suspension.
+let accountRow: { status: string } | null = { status: 'active' };
 
 function makeSupabaseMock() {
   return {
@@ -28,6 +32,7 @@ function makeSupabaseMock() {
       b.select = vi.fn(chain);
       b.eq = vi.fn(chain);
       b.limit = vi.fn(async () => ({ data: messageRows, error: lookupError }));
+      b.maybeSingle = vi.fn(async () => ({ data: accountRow, error: null }));
       return b;
     }),
   };
@@ -83,6 +88,7 @@ describe('GET /api/v1/media/{mediaId}', () => {
     downloadWhatsappMediaForAccount.mockReset();
     messageRows = [];
     lookupError = null;
+    accountRow = { status: 'active' };
     supabaseMock = makeSupabaseMock();
   });
 

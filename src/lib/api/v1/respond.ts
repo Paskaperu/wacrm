@@ -20,6 +20,7 @@ import type { RateLimitResult } from '@/lib/rate-limit';
 export type ApiErrorCode =
   | 'unauthorized' // missing / malformed / unknown / revoked / expired key
   | 'forbidden' // valid key, but missing the required scope
+  | 'account_suspended' // valid key, but its account is suspended (billing)
   | 'rate_limited' // per-key budget exhausted
   | 'bad_request' // malformed input
   | 'not_found'
@@ -58,6 +59,11 @@ export function unauthorized(message = 'Missing or invalid API key'): ApiError {
 /** 403 — authenticated, but the key lacks the scope this route needs. */
 export function forbidden(message: string): ApiError {
   return new ApiError('forbidden', message, 403);
+}
+
+/** 403 — the key is valid, but the account it belongs to is suspended. */
+export function accountSuspended(message = 'This account is suspended'): ApiError {
+  return new ApiError('account_suspended', message, 403);
 }
 
 /** 400 — bad input. */

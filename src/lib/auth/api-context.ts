@@ -33,7 +33,7 @@ import { supabaseAdmin } from '@/lib/flows/admin-client';
 import { findActiveKeyByHash, touchLastUsed } from '@/lib/api-keys/store';
 import { hashApiKey, looksLikeApiKey } from '@/lib/api-keys/keys';
 import { hasScope, type ApiScope } from '@/lib/api-keys/scopes';
-import { forbidden, rateLimited, unauthorized } from '@/lib/api/v1/respond';
+import { accountSuspended, forbidden, rateLimited, unauthorized } from '@/lib/api/v1/respond';
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 
 export interface ApiKeyContext {
@@ -72,6 +72,7 @@ function extractKey(request: Request): string | null {
  *
  *   401 unauthorized — no key, malformed, unknown, revoked, expired
  *   403 forbidden    — valid key without the required scope
+ *   403 account_suspended — valid key, but its account is suspended
  *   429 rate_limited — per-key budget exhausted
  *
  * On success, bumps `last_used_at` (fire-and-forget) and returns the
@@ -99,6 +100,23 @@ export async function requireApiKey(
   const limit = checkRateLimit(`apikey:${row.id}`, RATE_LIMITS.publicApi);
   if (!limit.success) {
     throw rateLimited(limit);
+  }
+
+  // Billing suspension gate. Same enforcement as the dashboard's
+  // (dashboard)/layout.tsx check, but keyed off `row.account_id` since a
+  // public-API caller has no cookie session to read a profile off of.
+  // Placed before the scope check so a suspended tenant's key doesn't
+  // even reveal what scopes it holds. Fails open on a lookup error or a
+  // missing row — same tradeoff as the layout check: suspension is only
+  // ever enforced when we get an explicit 'suspended' status back, so a
+  // Supabase blip can't lock out every tenant's API traffic at once.
+  const { data: account } = await supabaseAdmin()
+    .from('accounts')
+    .select('status')
+    .eq('id', row.account_id)
+    .maybeSingle();
+  if (account?.status === 'suspended') {
+    throw accountSuspended();
   }
 
   if (scope && !hasScope(row.scopes, scope)) {
